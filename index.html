@@ -158,6 +158,19 @@
   .danger-zone{border:1.5px solid var(--red);border-radius:var(--radius);padding:16px;margin-bottom:14px;}
   .danger-zone .dz-title{font-size:13px;font-weight:700;color:var(--red);margin-bottom:10px;display:flex;align-items:center;gap:6px;}
   .danger-zone p{font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:12px;}
+
+  /* Month multi-picker */
+  .mpicker{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:12px 14px;margin-bottom:14px;box-shadow:var(--shadow);}
+  .mpicker-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px;flex-wrap:wrap;}
+  .mpicker-head select{flex:1;min-width:90px;margin-top:0;padding:9px 12px;font-size:14px;}
+  .mpicker-actions{display:flex;gap:6px;}
+  .mpa-btn{padding:5px 11px;border-radius:7px;border:1.5px solid var(--border);background:var(--surface2);font-size:12px;cursor:pointer;color:var(--muted);font-family:'Noto Sans TC',sans-serif;white-space:nowrap;}
+  .mpa-btn:active{background:var(--border);}
+  .month-chips{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;}
+  .mchip{padding:7px 2px;border-radius:8px;border:1.5px solid var(--border);background:var(--surface2);font-size:13px;text-align:center;cursor:pointer;color:var(--muted);transition:all .15s;user-select:none;}
+  .mchip.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700;}
+  .mchip:active{transform:scale(.94);}
+  .range-tag{display:inline-block;background:var(--accent-light,#FEF0E7);color:var(--accent);border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;margin-left:6px;}
 </style>
 </head>
 <body>
@@ -255,17 +268,18 @@
 
 <!-- 分析 -->
 <div id="page-dashboard" class="page">
-  <div class="fb">
-    <select id="fy" onchange="renderDash()"></select>
-    <select id="fm" onchange="renderDash()">
-      <option value="1">1月</option><option value="2">2月</option><option value="3">3月</option>
-      <option value="4">4月</option><option value="5">5月</option><option value="6">6月</option>
-      <option value="7">7月</option><option value="8">8月</option><option value="9">9月</option>
-      <option value="10">10月</option><option value="11">11月</option><option value="12">12月</option>
-    </select>
+  <div class="mpicker" id="dash-mpicker">
+    <div class="mpicker-head">
+      <select id="fy" onchange="onDashYearChange()"></select>
+      <div class="mpicker-actions">
+        <button class="mpa-btn" onclick="dashSelectAll()">全選</button>
+        <button class="mpa-btn" onclick="dashClearAll()">清除</button>
+      </div>
+    </div>
+    <div class="month-chips" id="dash-chips"></div>
   </div>
   <div class="hero">
-    <small>本月淨利</small>
+    <small id="dash-period-label">淨利</small>
     <div class="big" id="dprofit">$0</div>
     <div class="sub">
       <div><strong id="dincomeh">$0</strong>總營收</div>
@@ -307,20 +321,20 @@
 
 <!-- 明細 -->
 <div id="page-history" class="page">
-  <div class="fb">
-    <select id="hy" onchange="renderHist()"></select>
-    <select id="hm" onchange="renderHist()">
-      <option value="0">全部月份</option>
-      <option value="1">1月</option><option value="2">2月</option><option value="3">3月</option>
-      <option value="4">4月</option><option value="5">5月</option><option value="6">6月</option>
-      <option value="7">7月</option><option value="8">8月</option><option value="9">9月</option>
-      <option value="10">10月</option><option value="11">11月</option><option value="12">12月</option>
-    </select>
-    <select id="ht" onchange="renderHist()">
-      <option value="all">全部</option>
-      <option value="income">收入</option>
-      <option value="expense">支出</option>
-    </select>
+  <div class="mpicker" id="hist-mpicker">
+    <div class="mpicker-head">
+      <select id="hy" onchange="onHistYearChange()"></select>
+      <select id="ht" onchange="renderHist()" style="flex:1;min-width:80px;margin-top:0;padding:9px 12px;font-size:14px;">
+        <option value="all">全部</option>
+        <option value="income">收入</option>
+        <option value="expense">支出</option>
+      </select>
+      <div class="mpicker-actions">
+        <button class="mpa-btn" onclick="histSelectAll()">全選</button>
+        <button class="mpa-btn" onclick="histClearAll()">清除</button>
+      </div>
+    </div>
+    <div class="month-chips" id="hist-chips"></div>
   </div>
   <div id="histlist"></div>
 </div>
@@ -451,14 +465,15 @@ function openDetail(type){
   const txs=S.txs.filter(t=>{
     const s=String(t.date).substring(0,10);
     const [y,m]=s.split('-').map(Number);
-    return y===dashY&&m===dashM&&t.type===type;
+    return y===dashY && dashSelMonths.has(m) && t.type===type;
   });
   const byDay={};
   txs.forEach(t=>{ const s=String(t.date).substring(0,10); byDay[s]=(byDay[s]||0)+t.amount; });
   const sorted=Object.keys(byDay).sort((a,b)=>a.localeCompare(b));
   const total=Object.values(byDay).reduce((s,v)=>s+v,0);
   const isInc=type==='income';
-  document.getElementById('dtitle').textContent=dashY+'年'+dashM+'月 '+(isInc?'每日收入':'每日支出')+'明細';
+  const pLbl=periodLabel(dashSelMonths);
+  document.getElementById('dtitle').textContent=dashY+'年 '+pLbl+' '+(isInc?'每日收入':'每日支出')+'明細';
   const dtEl=document.getElementById('dtotal');
   dtEl.textContent=fmt(total);
   dtEl.style.color=isInc?'var(--green)':'var(--red)';
@@ -529,11 +544,19 @@ function renderQuick(){
   document.getElementById('qpetty').textContent=fmt(petty);
 }
 
-function fillYears(){
+// ── Month selection state ──────────────────────────────
+let dashSelMonths = new Set();   // selected months for dashboard
+let histSelMonths = new Set();   // selected months for history
+
+function getYears(){
   const now=new Date();
   const years=new Set([now.getFullYear()]);
   S.txs.forEach(t=>years.add(parseInt(String(t.date).substring(0,4))));
-  const sorted=[...years].sort((a,b)=>b-a);
+  return [...years].sort((a,b)=>b-a);
+}
+
+function fillYears(){
+  const sorted=getYears();
   ['fy','hy'].forEach(id=>{
     const el=document.getElementById(id);
     const prev=el.value;
@@ -542,20 +565,79 @@ function fillYears(){
   });
 }
 
+function buildChips(containerId, selSet, onToggle){
+  const container=document.getElementById(containerId);
+  container.innerHTML='';
+  for(let m=1;m<=12;m++){
+    const chip=document.createElement('div');
+    chip.className='mchip'+(selSet.has(m)?' on':'');
+    chip.textContent=m+'月';
+    chip.onclick=()=>{ onToggle(m); };
+    container.appendChild(chip);
+  }
+}
+
+function initDashChips(){
+  const now=new Date();
+  if(dashSelMonths.size===0) dashSelMonths.add(now.getMonth()+1);
+  buildChips('dash-chips', dashSelMonths, m=>{
+    if(dashSelMonths.has(m)) dashSelMonths.delete(m); else dashSelMonths.add(m);
+    if(dashSelMonths.size===0) dashSelMonths.add(m); // at least 1
+    buildChips('dash-chips', dashSelMonths, arguments.callee);
+    renderDash();
+  });
+}
+function initHistChips(){
+  const now=new Date();
+  if(histSelMonths.size===0) histSelMonths.add(now.getMonth()+1);
+  buildChips('hist-chips', histSelMonths, m=>{
+    if(histSelMonths.has(m)) histSelMonths.delete(m); else histSelMonths.add(m);
+    if(histSelMonths.size===0) histSelMonths.add(m);
+    buildChips('hist-chips', histSelMonths, arguments.callee);
+    renderHist();
+  });
+}
+
+function dashSelectAll(){ dashSelMonths=new Set([1,2,3,4,5,6,7,8,9,10,11,12]); initDashChips(); renderDash(); }
+function dashClearAll(){ dashSelMonths=new Set([new Date().getMonth()+1]); initDashChips(); renderDash(); }
+function histSelectAll(){ histSelMonths=new Set([1,2,3,4,5,6,7,8,9,10,11,12]); initHistChips(); renderHist(); }
+function histClearAll(){ histSelMonths=new Set([new Date().getMonth()+1]); initHistChips(); renderHist(); }
+
+function onDashYearChange(){ initDashChips(); renderDash(); }
+function onHistYearChange(){ initHistChips(); renderHist(); }
+
+function periodLabel(selMonths){
+  const arr=[...selMonths].sort((a,b)=>a-b);
+  if(arr.length===12) return '全年';
+  if(arr.length===1) return arr[0]+'月';
+  // check consecutive
+  let consec=true;
+  for(let i=1;i<arr.length;i++) if(arr[i]!==arr[i-1]+1){consec=false;break;}
+  if(consec&&arr.length>1) return arr[0]+'～'+arr[arr.length-1]+'月';
+  return arr.map(m=>m+'月').join('、');
+}
+
 function renderDash(){
   fillYears();
   dashY=parseInt(document.getElementById('fy').value);
-  dashM=parseInt(document.getElementById('fm').value);
+  // dashM kept for backward compat with openDetail
+  dashM=[...dashSelMonths].sort((a,b)=>a-b)[0]||new Date().getMonth()+1;
+
   const txs=S.txs.filter(t=>{
     const s=String(t.date).substring(0,10);
     const [y,m]=s.split('-').map(Number);
-    return y===dashY&&m===dashM;
+    return y===dashY && dashSelMonths.has(m);
   });
   const inc=txs.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
   const exp=txs.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
   const profit=inc-exp;
   const margin=inc>0?((profit/inc)*100).toFixed(1):'0.0';
   const {cash,petty}=calcBal();
+
+  // Update period label on hero
+  const lbl=periodLabel(dashSelMonths);
+  document.getElementById('dash-period-label').textContent=lbl+' 淨利';
+
   document.getElementById('dprofit').textContent=fmt(profit);
   document.getElementById('dprofit').style.color=profit>=0?'#fff':'#ffaaaa';
   document.getElementById('dincomeh').textContent=fmt(inc);
@@ -609,13 +691,12 @@ function renderExpBreak(txs){
 function renderHist(){
   fillYears();
   const year=parseInt(document.getElementById('hy').value);
-  const month=parseInt(document.getElementById('hm').value);
   const type=document.getElementById('ht').value;
   let txs=S.txs.filter(t=>{
     const s=String(t.date).substring(0,10);
     const [y,m]=s.split('-').map(Number);
     if(y!==year)return false;
-    if(month!==0&&m!==month)return false;
+    if(!histSelMonths.has(m))return false;
     if(type!=='all'&&t.type!==type)return false;
     return true;
   });
@@ -779,8 +860,8 @@ function renderAdminInfo(){
   document.getElementById('txdate').value=new Date().toISOString().split('T')[0];
   const now=new Date();
   fillYears();
-  document.getElementById('fm').value=now.getMonth()+1;
-  document.getElementById('hm').value=now.getMonth()+1;
+  initDashChips();
+  initHistChips();
   selType('income');
   renderQuick();
   setSyncUI('ing','連線中…');
