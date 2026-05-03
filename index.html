@@ -279,7 +279,7 @@
     <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">匯出所有記錄為 CSV 或 Excel 格式。</p>
     <button class="btn bp" onclick="exportCSV()" style="margin-top:0;">⬇ 匯出 CSV</button>
     <button class="btn be" onclick="exportExcel()">📊 匯出 Excel</button>
-    <button class="btn bd" onclick="clearLocal()">🗑 清除本機暫存</button>
+    <button class="btn bd" onclick="resetAll()">🗑 清除全部資料並重設</button>
   </div>
 </div>
 
@@ -300,20 +300,38 @@ const ICONS = {
 };
 const WD = ['日','一','二','三','四','五','六'];
 
-function lsave(){ try{ localStorage.setItem('fy4',JSON.stringify(S)); }catch(e){} }
-function lload(){ try{ const d=localStorage.getItem('fy4'); if(d) S=JSON.parse(d); }catch(e){} }
+// ── 修正4：純字串日期轉星期，用 UTC 避免時區偏移 ─────────
+function safeDate(dateStr){
+  const s = String(dateStr).substring(0,10);
+  const [y,m,d] = s.split('-').map(Number);
+  return new Date(Date.UTC(y, m-1, d));
+}
+function dateWD(dateStr){ return WD[safeDate(dateStr).getUTCDay()]; }
+function dateLabel(dateStr){
+  const s = String(dateStr).substring(0,10);
+  return s + ' (' + dateWD(s) + ')';
+}
+
+function lsave(){ try{ localStorage.setItem('fy5',JSON.stringify(S)); }catch(e){} }
+function lload(){ try{ const d=localStorage.getItem('fy5'); if(d) S=JSON.parse(d); }catch(e){} }
 
 function setSyncUI(st,label){
   document.getElementById('sdot').className='sdot '+(st==='ok'?'ok':st==='err'?'err':'ing');
   document.getElementById('slbl').textContent=label;
 }
 
+// ── 修正1：GET 拉取全部（含設定）; POST 用 text/plain 避免 preflight ──
 async function cloudFetch(){
   try {
-    const res = await fetch(GAS+'?action=getAll');
+    const res  = await fetch(GAS+'?action=getAll');
     const data = await res.json();
-    if(Array.isArray(data) && data.length >= 0){
-      S.txs = data;
+    if(data && Array.isArray(data.txs)){
+      S.txs = data.txs;
+      // 修正3：初始金額同步
+      if(data.settings){
+        S.cash  = Number(data.settings.initialCash)  || 0;
+        S.petty = Number(data.settings.initialPetty) || 0;
+      }
       lsave();
       setSyncUI('ok','已同步');
     }
@@ -323,27 +341,28 @@ async function cloudFetch(){
   }
 }
 
-async function cloudAdd(tx){
+async function gasPost(payload){
   setSyncUI('ing','同步中…');
   try{
-    await fetch(GAS,{method:'POST',mode:'no-cors',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({action:'add',tx})
+    await fetch(GAS,{
+      method:'POST', mode:'no-cors',
+      headers:{'Content-Type':'text/plain;charset=UTF-8'},
+      body: JSON.stringify(payload)
     });
     setSyncUI('ok','已同步');
   }catch(e){ setSyncUI('err','同步失敗'); }
 }
 
-async function cloudDel(id){
-  setSyncUI('ing','同步中…');
-  try{
-    await fetch(GAS,{method:'POST',mode:'no-cors',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({action:'delete',id})
-    });
-    setSyncUI('ok','已同步');
-  }catch(e){ setSyncUI('err','同步失敗'); }
+async function cloudAdd(tx){
+  // 確保日期只傳 YYYY-MM-DD 純字串
+  const safe = {...tx, date: String(tx.date).substring(0,10)};
+  await gasPost({action:'add', tx:safe});
 }
+async function cloudDel(id){ await gasPost({action:'delete', id}); }
+// 修正3：儲存設定同步雲端
+async function cloudSaveSettings(){ await gasPost({action:'saveSettings', cash:S.cash, petty:S.petty}); }
+// 修正2：清除雲端全部資料並重設
+async function cloudReset(){ await gasPost({action:'reset'}); }
 
 function fmt(n){ return '$'+Math.round(n).toLocaleString('zh-TW'); }
 
@@ -367,26 +386,25 @@ function go(id,btn){
 
 function openDetail(type){
   const txs=S.txs.filter(t=>{
-    const [y,m]=t.date.split('-').map(Number);
+    const s=String(t.date).substring(0,10);
+    const [y,m]=s.split('-').map(Number);
     return y===dashY&&m===dashM&&t.type===type;
   });
   const byDay={};
-  txs.forEach(t=>{ byDay[t.date]=(byDay[t.date]||0)+t.amount; });
+  txs.forEach(t=>{ const s=String(t.date).substring(0,10); byDay[s]=(byDay[s]||0)+t.amount; });
   const sorted=Object.keys(byDay).sort((a,b)=>a.localeCompare(b));
   const total=Object.values(byDay).reduce((s,v)=>s+v,0);
   const isInc=type==='income';
-  document.getElementById('dtitle').textContent=`${dashY}年${dashM}月 ${isInc?'每日收入':'每日支出'}明細`;
+  document.getElementById('dtitle').textContent=dashY+'年'+dashM+'月 '+(isInc?'每日收入':'每日支出')+'明細';
   const dtEl=document.getElementById('dtotal');
   dtEl.textContent=fmt(total);
   dtEl.style.color=isInc?'var(--green)':'var(--red)';
   document.getElementById('dlist').innerHTML=!sorted.length
     ?'<div class="empty"><div class="empty-icon">📊</div>本月無資料</div>'
     :sorted.map(d=>{
-        const dObj=new Date(d+'T00:00:00');
-        return `<div class="dr">
-          <span class="dc">${dashM}/${parseInt(d.split('-')[2])} (${WD[dObj.getDay()]})</span>
-          <span class="da ${isInc?'g':'r'}">${isInc?'+':'-'}${fmt(byDay[d])}</span>
-        </div>`;
+        const dd=parseInt(d.split('-')[2]);
+        return '<div class="dr"><span class="dc">'+dashM+'/'+dd+' ('+dateWD(d)+')</span>'
+             + '<span class="da '+(isInc?'g':'r')+'">'+(isInc?'+':'-')+fmt(byDay[d])+'</span></div>';
       }).join('');
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.getElementById('page-detail').classList.add('active');
@@ -399,7 +417,7 @@ function closeDetail(){
 function selType(t){
   curType=t;
   document.querySelectorAll('.pill').forEach(p=>p.classList.remove('pi','pe'));
-  document.querySelector(`.pill[data-t="${t}"]`).classList.add(t==='income'?'pi':'pe');
+  document.querySelector('.pill[data-t="'+t+'"]').classList.add(t==='income'?'pi':'pe');
   const c=document.getElementById('txcat'); c.innerHTML='';
   (t==='income'?['營業收入','網路訂購','其他收入']:['食材原料','水電費','租金','人事薪資','包材耗材','設備維修','其他支出'])
     .forEach(v=>{ const o=document.createElement('option');o.value=o.textContent=v;c.appendChild(o); });
@@ -410,7 +428,9 @@ async function addTx(){
   const date=document.getElementById('txdate').value;
   if(!date||isNaN(amt)||amt<=0){ toast('請填寫日期與金額'); return; }
   const tx={
-    id:Date.now(),type:curType,date,amount:amt,
+    id:Date.now(), type:curType,
+    date: String(date).substring(0,10), // 確保純 YYYY-MM-DD
+    amount:amt,
     category:document.getElementById('txcat').value,
     method:document.getElementById('txmethod').value,
     note:document.getElementById('txnote').value.trim()
@@ -449,12 +469,12 @@ function renderQuick(){
 function fillYears(){
   const now=new Date();
   const years=new Set([now.getFullYear()]);
-  S.txs.forEach(t=>years.add(parseInt(t.date.split('-')[0])));
+  S.txs.forEach(t=>years.add(parseInt(String(t.date).substring(0,4))));
   const sorted=[...years].sort((a,b)=>b-a);
   ['fy','hy'].forEach(id=>{
     const el=document.getElementById(id);
     const prev=el.value;
-    el.innerHTML=sorted.map(y=>`<option value="${y}">${y}年</option>`).join('');
+    el.innerHTML=sorted.map(y=>'<option value="'+y+'">'+y+'年</option>').join('');
     if(prev&&sorted.includes(parseInt(prev))) el.value=prev;
   });
 }
@@ -463,7 +483,11 @@ function renderDash(){
   fillYears();
   dashY=parseInt(document.getElementById('fy').value);
   dashM=parseInt(document.getElementById('fm').value);
-  const txs=S.txs.filter(t=>{ const [y,m]=t.date.split('-').map(Number); return y===dashY&&m===dashM; });
+  const txs=S.txs.filter(t=>{
+    const s=String(t.date).substring(0,10);
+    const [y,m]=s.split('-').map(Number);
+    return y===dashY&&m===dashM;
+  });
   const inc=txs.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
   const exp=txs.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
   const profit=inc-exp;
@@ -486,19 +510,21 @@ function renderBar(year){
   const chart=document.getElementById('barchart');
   const md=Array.from({length:12},(_,i)=>{
     const m=i+1;
-    const t=S.txs.filter(tx=>{ const [y,mo]=tx.date.split('-').map(Number); return y===year&&mo===m; });
+    const t=S.txs.filter(tx=>{
+      const s=String(tx.date).substring(0,10);
+      const [y,mo]=s.split('-').map(Number);
+      return y===year&&mo===m;
+    });
     return {m,i:t.filter(x=>x.type==='income').reduce((s,x)=>s+x.amount,0),
                e:t.filter(x=>x.type==='expense').reduce((s,x)=>s+x.amount,0)};
   });
   const max=Math.max(...md.map(d=>Math.max(d.i,d.e)),1);
-  chart.innerHTML=md.map(d=>`
-    <div class="bgp">
-      <div class="bars">
-        <div class="bar ib" style="height:${Math.round(d.i/max*100)}px"></div>
-        <div class="bar eb" style="height:${Math.round(d.e/max*100)}px"></div>
-      </div>
-      <div class="ml">${d.m}月</div>
-    </div>`).join('');
+  chart.innerHTML=md.map(d=>
+    '<div class="bgp"><div class="bars">'
+    +'<div class="bar ib" style="height:'+Math.round(d.i/max*100)+'px"></div>'
+    +'<div class="bar eb" style="height:'+Math.round(d.e/max*100)+'px"></div>'
+    +'</div><div class="ml">'+d.m+'月</div></div>'
+  ).join('');
 }
 
 function renderExpBreak(txs){
@@ -510,10 +536,10 @@ function renderExpBreak(txs){
   const total=Object.values(map).reduce((s,v)=>s+v,0);
   el.innerHTML=Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>{
     const pct=total>0?((amt/total)*100).toFixed(1):'0';
-    return `<div class="ir"><span>${ICONS[cat]||'📋'} ${cat}</span>
-      <div style="text-align:right"><div style="font-weight:700;font-size:14px">${fmt(amt)}</div>
-      <div style="font-size:12px;color:var(--muted)">${pct}%</div></div></div>
-      <div class="exp-bar"><div class="exp-fill" style="width:${pct}%"></div></div>`;
+    return '<div class="ir"><span>'+(ICONS[cat]||'📋')+' '+cat+'</span>'
+      +'<div style="text-align:right"><div style="font-weight:700;font-size:14px">'+fmt(amt)+'</div>'
+      +'<div style="font-size:12px;color:var(--muted)">'+pct+'%</div></div></div>'
+      +'<div class="exp-bar"><div class="exp-fill" style="width:'+pct+'%"></div></div>';
   }).join('');
 }
 
@@ -523,7 +549,8 @@ function renderHist(){
   const month=parseInt(document.getElementById('hm').value);
   const type=document.getElementById('ht').value;
   let txs=S.txs.filter(t=>{
-    const [y,m]=t.date.split('-').map(Number);
+    const s=String(t.date).substring(0,10);
+    const [y,m]=s.split('-').map(Number);
     if(y!==year)return false;
     if(month!==0&&m!==month)return false;
     if(type!=='all'&&t.type!==type)return false;
@@ -532,57 +559,75 @@ function renderHist(){
   const el=document.getElementById('histlist');
   if(!txs.length){ el.innerHTML='<div class="empty"><div class="empty-icon">🔍</div>此期間無記錄</div>'; return; }
   const byDate={};
-  txs.forEach(t=>{ (byDate[t.date]=byDate[t.date]||[]).push(t); });
+  // 修正4：確保 key 為純 YYYY-MM-DD
+  txs.forEach(t=>{ const s=String(t.date).substring(0,10); (byDate[s]=byDate[s]||[]).push(t); });
   el.innerHTML=Object.keys(byDate).sort((a,b)=>b.localeCompare(a)).map(date=>{
     const dt=byDate[date];
     const di=dt.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
     const de=dt.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
-    const dObj=new Date(date+'T00:00:00');
-    return `<div style="margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div style="font-size:13px;font-weight:700;color:var(--muted)">${date} (${WD[dObj.getDay()]})</div>
-        <div style="font-size:12px">
-          <span style="color:var(--green)">+${fmt(di)}</span>
-          ${de?`<span style="color:var(--red);margin-left:6px">-${fmt(de)}</span>`:''}
-        </div>
-      </div>
-      <div class="card" style="margin-bottom:0;padding:8px 14px">
-        ${dt.map(t=>`<div class="txi">
-          <div class="txic ${t.type}">${ICONS[t.category]||'💰'}</div>
-          <div class="txif">
-            <div class="txin">${t.category}${t.note?' · '+t.note:''}</div>
-            <div class="txim">${t.method}</div>
-          </div>
-          <div class="txia ${t.type}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</div>
-          <button class="txdel" onclick="delTx(${t.id})">✕</button>
-        </div>`).join('')}
-      </div>
-    </div>`;
+    // 修正4：使用 dateWD 函式
+    return '<div style="margin-bottom:14px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+      +'<div style="font-size:13px;font-weight:700;color:var(--muted)">'+date+' ('+dateWD(date)+')</div>'
+      +'<div style="font-size:12px">'
+      +'<span style="color:var(--green)">+'+fmt(di)+'</span>'
+      +(de?'<span style="color:var(--red);margin-left:6px">-'+fmt(de)+'</span>':'')
+      +'</div></div>'
+      +'<div class="card" style="margin-bottom:0;padding:8px 14px">'
+      +dt.map(t=>'<div class="txi">'
+        +'<div class="txic '+t.type+'">'+(ICONS[t.category]||'💰')+'</div>'
+        +'<div class="txif">'
+        +'<div class="txin">'+t.category+(t.note?' · '+t.note:'')+'</div>'
+        +'<div class="txim">'+t.method+'</div>'
+        +'</div>'
+        +'<div class="txia '+t.type+'">'+(t.type==='income'?'+':'-')+fmt(t.amount)+'</div>'
+        +'<button class="txdel" onclick="delTx('+t.id+')">✕</button>'
+        +'</div>').join('')
+      +'</div></div>';
   }).join('');
 }
 
 function renderSetup(){
   document.getElementById('scash').value=S.cash||'';
   document.getElementById('spetty').value=S.petty||'';
-  document.getElementById('sinfo').innerHTML=`
-    <div class="ir"><span>業績現金初始</span><strong>${fmt(S.cash)}</strong></div>
-    <div class="ir"><span>零用金初始</span><strong>${fmt(S.petty)}</strong></div>
-    <div class="ir"><span>雲端同步</span><strong>✅ Google 試算表</strong></div>
-    <div class="ir"><span>總記錄筆數</span><strong>${S.txs.length} 筆</strong></div>`;
+  document.getElementById('sinfo').innerHTML=
+    '<div class="ir"><span>業績現金初始</span><strong>'+fmt(S.cash)+'</strong></div>'
+    +'<div class="ir"><span>零用金初始</span><strong>'+fmt(S.petty)+'</strong></div>'
+    +'<div class="ir"><span>雲端同步</span><strong>✅ Google 試算表</strong></div>'
+    +'<div class="ir"><span>總記錄筆數</span><strong>'+S.txs.length+' 筆</strong></div>';
 }
-function saveSetup(){
+
+// 修正3：儲存設定同步雲端
+async function saveSetup(){
   S.cash=parseFloat(document.getElementById('scash').value)||0;
   S.petty=parseFloat(document.getElementById('spetty').value)||0;
-  lsave(); renderSetup(); renderQuick(); toast('✓ 設定已儲存');
+  lsave(); renderSetup(); renderQuick();
+  toast('✓ 設定儲存中…');
+  await cloudSaveSettings();
+  toast('✓ 設定已儲存並同步雲端');
+}
+
+// 修正2：清除試算表並重設 App
+async function resetAll(){
+  if(!confirm('確定清除所有資料並重設？\n此動作將同步清除 Google 試算表，無法復原。'))return;
+  toast('重設中，請稍候…');
+  setSyncUI('ing','重設中…');
+  await cloudReset();
+  S = { txs:[], cash:0, petty:0 };
+  lsave();
+  renderQuick(); renderSetup();
+  fillYears();
+  toast('✅ 已清除所有資料並重設完成');
+  setSyncUI('ok','已同步');
 }
 
 function exportCSV(){
   if(!S.txs.length){ toast('無資料'); return; }
   const rows=[['日期','類型','類別','金額','付款方式','備註']];
-  [...S.txs].sort((a,b)=>a.date.localeCompare(b.date)).forEach(t=>{
-    rows.push([t.date,t.type==='income'?'收入':'支出',t.category,t.amount,t.method,t.note||'']);
+  [...S.txs].sort((a,b)=>String(a.date).localeCompare(String(b.date))).forEach(t=>{
+    rows.push([String(t.date).substring(0,10),t.type==='income'?'收入':'支出',t.category,t.amount,t.method,t.note||'']);
   });
-  const blob=new Blob(['\uFEFF'+rows.map(r=>r.map(c=>`"${c}"`).join(',')).join('\n')],{type:'text/csv;charset=utf-8;'});
+  const blob=new Blob(['\uFEFF'+rows.map(r=>r.map(c=>'"'+c+'"').join(',')).join('\n')],{type:'text/csv;charset=utf-8;'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='豐園收支.csv';a.click();
   toast('✓ CSV 已匯出');
 }
@@ -591,25 +636,20 @@ function exportExcel(){
   if(!S.txs.length){ toast('無資料'); return; }
   const wb=XLSX.utils.book_new();
   const all=[['日期','星期','類型','類別','金額','付款方式','備註']];
-  [...S.txs].sort((a,b)=>a.date.localeCompare(b.date)).forEach(t=>{
-    const d=new Date(t.date+'T00:00:00');
-    all.push([t.date,'('+WD[d.getDay()]+')',t.type==='income'?'收入':'支出',t.category,t.amount,t.method,t.note||'']);
+  [...S.txs].sort((a,b)=>String(a.date).localeCompare(String(b.date))).forEach(t=>{
+    const s=String(t.date).substring(0,10);
+    all.push([s,'('+dateWD(s)+')',t.type==='income'?'收入':'支出',t.category,t.amount,t.method,t.note||'']);
   });
   const ws1=XLSX.utils.aoa_to_sheet(all);
   ws1['!cols']=[{wch:12},{wch:6},{wch:6},{wch:12},{wch:10},{wch:10},{wch:20}];
   XLSX.utils.book_append_sheet(wb,ws1,'所有記錄');
-
   const mm={};
-  S.txs.forEach(t=>{ const k=t.date.slice(0,7); if(!mm[k])mm[k]={i:0,e:0}; t.type==='income'?mm[k].i+=t.amount:mm[k].e+=t.amount; });
+  S.txs.forEach(t=>{ const k=String(t.date).substring(0,7); if(!mm[k])mm[k]={i:0,e:0}; t.type==='income'?mm[k].i+=t.amount:mm[k].e+=t.amount; });
   const sum=[['年月','收入','支出','淨利','毛利率']];
-  Object.keys(mm).sort().forEach(k=>{
-    const {i,e}=mm[k];const p=i-e;
-    sum.push([k,i,e,p,i>0?((p/i)*100).toFixed(1)+'%':'0.0%']);
-  });
+  Object.keys(mm).sort().forEach(k=>{ const {i,e}=mm[k];const p=i-e; sum.push([k,i,e,p,i>0?((p/i)*100).toFixed(1)+'%':'0.0%']); });
   const ws2=XLSX.utils.aoa_to_sheet(sum);
   ws2['!cols']=[{wch:10},{wch:12},{wch:12},{wch:12},{wch:10}];
   XLSX.utils.book_append_sheet(wb,ws2,'月度摘要');
-
   const cm={};
   S.txs.filter(t=>t.type==='expense').forEach(t=>{ cm[t.category]=(cm[t.category]||0)+t.amount; });
   const ct=Object.values(cm).reduce((s,v)=>s+v,0);
@@ -622,14 +662,6 @@ function exportExcel(){
   toast('📊 Excel 已匯出');
 }
 
-function clearLocal(){
-  if(!confirm('清除本機暫存？雲端資料不受影響，重新整理後會從雲端還原。'))return;
-  localStorage.removeItem('fy4');
-  S={txs:[],cash:0,petty:0};
-  renderQuick(); toast('本機暫存已清除');
-}
-
-// ── 初始化 ──────────────────────────────────────────────
 (async function init(){
   lload();
   document.getElementById('txdate').value=new Date().toISOString().split('T')[0];
