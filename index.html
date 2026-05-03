@@ -131,6 +131,33 @@
   .spinner{width:38px;height:38px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
   #loading p{font-size:14px;color:var(--muted);}
+
+  /* Admin */
+  .admin-btn{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:#fff;border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:'Noto Sans TC',sans-serif;transition:all .2s;}
+  .admin-btn:active{background:rgba(255,255,255,0.28);}
+
+  /* Modal overlay */
+  .modal-overlay{position:fixed;inset:0;background:rgba(44,36,23,0.55);z-index:300;display:flex;align-items:center;justify-content:center;padding:24px;}
+  .modal-overlay.hide{display:none;}
+  .modal-box{background:var(--surface);border-radius:20px;padding:28px 22px;width:100%;max-width:340px;box-shadow:0 8px 40px rgba(44,36,23,0.18);}
+  .modal-title{font-size:18px;font-weight:700;margin-bottom:6px;}
+  .modal-sub{font-size:13px;color:var(--muted);margin-bottom:20px;}
+  .modal-input{width:100%;padding:13px 16px;border-radius:12px;border:2px solid var(--border);font-size:20px;letter-spacing:6px;text-align:center;font-family:'Noto Sans TC',sans-serif;outline:none;transition:border-color .2s;}
+  .modal-input:focus{border-color:var(--accent);}
+  .modal-err{color:var(--red);font-size:13px;margin-top:8px;min-height:18px;text-align:center;}
+  .modal-btns{display:flex;gap:10px;margin-top:18px;}
+  .modal-btns button{flex:1;padding:12px;border-radius:10px;border:none;font-family:'Noto Sans TC',sans-serif;font-size:14px;font-weight:700;cursor:pointer;}
+  .modal-cancel{background:var(--surface2);color:var(--muted);}
+  .modal-ok{background:var(--accent);color:#fff;}
+
+  /* Admin page */
+  #page-admin .admin-hero{background:linear-gradient(135deg,#2C2417,#4A3828);border-radius:var(--radius);padding:20px;color:#fff;margin-bottom:18px;}
+  #page-admin .admin-hero h2{font-size:18px;font-weight:700;margin-bottom:4px;}
+  #page-admin .admin-hero p{font-size:12px;opacity:.7;}
+  .logout-btn{float:right;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.25);color:#fff;border-radius:8px;padding:5px 12px;font-size:12px;cursor:pointer;font-family:'Noto Sans TC',sans-serif;}
+  .danger-zone{border:1.5px solid var(--red);border-radius:var(--radius);padding:16px;margin-bottom:14px;}
+  .danger-zone .dz-title{font-size:13px;font-weight:700;color:var(--red);margin-bottom:10px;display:flex;align-items:center;gap:6px;}
+  .danger-zone p{font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:12px;}
 </style>
 </head>
 <body>
@@ -143,9 +170,12 @@
 <header>
   <div class="hrow">
     <div><h1>🥟 豐園包子店</h1><p>收支管理系統</p></div>
-    <div class="sbadge">
-      <div class="sdot" id="sdot"></div>
-      <span class="slbl" id="slbl">連線中</span>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div class="sbadge">
+        <div class="sdot" id="sdot"></div>
+        <span class="slbl" id="slbl">連線中</span>
+      </div>
+      <button class="admin-btn" onclick="openAdminLogin()">🔐</button>
     </div>
   </div>
 </header>
@@ -156,6 +186,40 @@
   <button onclick="go('history',this)">📋 明細</button>
   <button onclick="go('setup',this)">⚙️ 設定</button>
 </nav>
+
+<!-- Admin Login Modal -->
+<div class="modal-overlay hide" id="admin-modal">
+  <div class="modal-box">
+    <div class="modal-title">🔐 管理員登入</div>
+    <div class="modal-sub">請輸入管理員密碼</div>
+    <input class="modal-input" type="password" id="admin-pw" placeholder="••••" maxlength="10"
+      onkeydown="if(event.key==='Enter') checkAdminPw()">
+    <div class="modal-err" id="admin-err"></div>
+    <div class="modal-btns">
+      <button class="modal-cancel" onclick="closeAdminLogin()">取消</button>
+      <button class="modal-ok" onclick="checkAdminPw()">登入</button>
+    </div>
+  </div>
+</div>
+
+<!-- Admin Page -->
+<div id="page-admin" class="page">
+  <div class="admin-hero">
+    <button class="logout-btn" onclick="adminLogout()">登出</button>
+    <h2>🛠 管理員後台</h2>
+    <p>僅限授權人員操作</p>
+  </div>
+
+  <div class="sec">系統狀態</div>
+  <div class="card" id="admin-sinfo"></div>
+
+  <div class="sec">危險操作區</div>
+  <div class="danger-zone">
+    <div class="dz-title">⚠️ 清除全部資料</div>
+    <p>將同步清除 Google 試算表所有收支記錄，並將初始金額歸零。此動作無法復原，請謹慎操作。</p>
+    <button class="btn bd" style="margin-top:0;" onclick="resetAll()">🗑 清除全部資料並重設</button>
+  </div>
+</div>
 
 <!-- 記帳 -->
 <div id="page-record" class="page active">
@@ -279,7 +343,6 @@
     <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">匯出所有記錄為 CSV 或 Excel 格式。</p>
     <button class="btn bp" onclick="exportCSV()" style="margin-top:0;">⬇ 匯出 CSV</button>
     <button class="btn be" onclick="exportExcel()">📊 匯出 Excel</button>
-    <button class="btn bd" onclick="resetAll()">🗑 清除全部資料並重設</button>
   </div>
 </div>
 
@@ -660,6 +723,55 @@ function exportExcel(){
   XLSX.utils.book_append_sheet(wb,ws3,'支出分類');
   XLSX.writeFile(wb,'豐園包子店收支報表.xlsx');
   toast('📊 Excel 已匯出');
+}
+
+// ── Admin ────────────────────────────────────────────────
+const ADMIN_PW = '1220';
+let adminLoggedIn = false;
+
+function openAdminLogin(){
+  document.getElementById('admin-pw').value='';
+  document.getElementById('admin-err').textContent='';
+  document.getElementById('admin-modal').classList.remove('hide');
+  setTimeout(()=>document.getElementById('admin-pw').focus(),100);
+}
+function closeAdminLogin(){
+  document.getElementById('admin-modal').classList.add('hide');
+}
+function checkAdminPw(){
+  const pw = document.getElementById('admin-pw').value;
+  if(pw === ADMIN_PW){
+    adminLoggedIn = true;
+    closeAdminLogin();
+    // Switch to admin page
+    document.getElementById('page-detail').classList.remove('active');
+    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+    document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
+    document.getElementById('page-admin').classList.add('active');
+    renderAdminInfo();
+    toast('✅ 已進入管理員後台');
+  } else {
+    document.getElementById('admin-err').textContent='密碼錯誤，請再試一次';
+    document.getElementById('admin-pw').value='';
+    document.getElementById('admin-pw').focus();
+  }
+}
+function adminLogout(){
+  adminLoggedIn = false;
+  // Go back to record page
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
+  document.getElementById('page-record').classList.add('active');
+  document.querySelector('nav button').classList.add('active');
+  renderQuick();
+  toast('已登出管理員後台');
+}
+function renderAdminInfo(){
+  document.getElementById('admin-sinfo').innerHTML=
+    '<div class="ir"><span>業績現金初始</span><strong>'+fmt(S.cash)+'</strong></div>'
+    +'<div class="ir"><span>零用金初始</span><strong>'+fmt(S.petty)+'</strong></div>'
+    +'<div class="ir"><span>雲端同步</span><strong>✅ Google 試算表</strong></div>'
+    +'<div class="ir"><span>總記錄筆數</span><strong>'+S.txs.length+' 筆</strong></div>';
 }
 
 (async function init(){
